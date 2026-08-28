@@ -1,0 +1,20 @@
+# Core
+numpy
+pandas
+scikit-learn
+scipy
+matplotlib
+Pillow
+
+# Model 6: reinforcement learning
+gymnasium
+
+# Model 6: deployment
+flask
+requests
+joblib
+
+# NOTE: torch is intentionally left out of this file.
+# Install the CPU build separately (much smaller download than the default):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Needed starting Model 3 (day 11+) -- no need to install it before then.

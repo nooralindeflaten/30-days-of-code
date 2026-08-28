@@ -2,7 +2,7 @@
 
 | Day | Topic | Status | Unaided? | AI use (if any) | Time spent |
 |---|---|---|---|---|---|
-| 1 | | not started | | | |
+| 1 | | Finished | Yes | Had AI clean up the plotting | 30min - 1 hour|
 | 2 | | not started | | | |
 | 3 | | not started | | | |
 | 4 | | not started | | | |

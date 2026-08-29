@@ -3,7 +3,7 @@
 | Day | Topic | Status | Unaided? | AI use (if any) | Time spent |
 |---|---|---|---|---|---|
 | 1 | | Finished | Yes | Had AI clean up the plotting | 30min - 1 hour|
-| 2 | | not started | | | |
+| 2 | | Finished | Codewise yes | Checked my solution for correct runsyntax | 3h ish. |
 | 3 | | not started | | | |
 | 4 | | not started | | | |
 | 5 (Model 1) | | not started | | | |

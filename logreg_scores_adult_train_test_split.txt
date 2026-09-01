@@ -1,0 +1,2 @@
+{'classification_report': '              precision    recall  f1-score   support\n\n           0      0.886     0.933     0.909      7479\n           1      0.736     0.607     0.665      2290\n\n    accuracy                          0.857      9769\n   macro avg      0.811     0.770     0.787      9769\nweighted avg      0.851     0.857     0.852      9769\n', 'confusion_matrix': array([[6981,  498],
+       [ 900, 1390]]), 'roc_auc': 0.911, 'Cross-validated ROC AUC:': array([0.906, 0.905, 0.908]), 'Mean AUC:': np.float64(0.906)}

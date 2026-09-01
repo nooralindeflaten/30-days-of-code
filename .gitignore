@@ -4,3 +4,6 @@ __pycache__/
 *.png
 *.joblib
 .venv/ add .gitignore.DS_Store
+data/
+testing_notebooks/
+testing_notebooks/

@@ -1,4 +1,9 @@
-from ..day_04.solution4 import Datasets, StratifiedKfoldCV, GridSearchCV, cross_val_score, KfoldCV
+import os
+import sys
+folder = sys.path.append(os.path.dirname(os.path.abspath("my-solutions/day-04-cv-tuning/solution4.py")))
+sys.path.append(folder)
+import solution4 
+from solution4 import Datasets, StratifiedKfoldCV, GridSearchCV, cross_val_score, KfoldCV
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -9,7 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict, Counter
 
-data = Datasets('custom',split_method='sklearn')
+data = solution4.Datasets('custom',split_method='sklearn')
 data.load_custom_data(file_path='data/')  
 
 def log_reg_pipeline(case: Datasets):
@@ -63,7 +68,8 @@ def decision_tree_pipeline(case: Datasets):
     
     model_params = grid_search.best_params_
     model = DecisionTreeClassifier(**model_params)
-    return model
+    return model, model_params, cv, X_train, y_train, X_test, y_test
+
     
 
 def knn_pipeline(case: Datasets):
@@ -128,3 +134,6 @@ def eval_models(case: Datasets):
     print("Recall: {:.4f} ± {:.4f}".format(cv_means_log['recall'], cv_stds_log['recall']))
     print("F1 Score: {:.4f} ± {:.4f}".format(cv_means_log['f1'], cv_stds_log['f1']))
     print("ROC-AUC: {:.4f} ± {:.4f}".format(cv_means_log['roc_auc'], cv_stds_log['roc_auc']))
+
+model, model_params, cv, X_train_dtc, y_train_dtc, X_test_dtc, y_test_dtc = decision_tree_pipeline(data)
+print("Best hyperparameters for DecisionTreeClassifier:", model_params)

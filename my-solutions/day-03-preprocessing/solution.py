@@ -211,7 +211,8 @@ print(f"test_df shape: {test_df.shape}, target NaNs: {test_df['target'].isna().s
 
 train_df.to_csv("data/training_dataset.csv", index=False)
 test_df.to_csv("data/testing_dataset.csv", index=False)
-
+full_df = pd.concat([train_df, test_df], axis=0)
+full_df.to_csv("data/full_dataset.csv", index=False)
 
 # ---------------------------- Data Preprocessing using sklearn Pipeline and ColumnTransformer ----------------------------
 

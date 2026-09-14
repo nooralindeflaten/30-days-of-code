@@ -32,17 +32,16 @@ class Datasets:
         self.num_cols = None
         self.cat_cols = None
     
-    def load_custom_data(self, features,file_path='data/'):
+    def load_custom_data(self,file_path='data/'):
         training_data = pd.read_csv(file_path + "training_dataset.csv")
-        training_data = training_data[features + ['target']]
         testing_data = pd.read_csv(file_path + "testing_dataset.csv")
-        testing_data = testing_data[features + ['target']]
-        self.X = pd.concat([training_data.drop(columns=['target']), testing_data.drop(columns=['target'])], axis=0)
-        self.y = pd.concat([training_data['target'], testing_data['target']], axis=0)
-        self.X_train = training_data.drop(columns=['target'])
-        self.y_train = training_data['target']
-        self.X_test = testing_data.drop(columns=['target'])
-        self.y_test = testing_data['target']
+        self.X_train = training_data.iloc[:, :-1]
+        self.y_train = training_data.iloc[:, -1]
+        self.X_test = testing_data.iloc[:, :-1]
+        self.y_test = testing_data.iloc[:, -1]
+        full_data = pd.read_csv(file_path + "full_dataset.csv")
+        self.X = full_data.iloc[:, :-1]
+        self.y = full_data.iloc[:, -1]
           
 
 class KfoldCV:

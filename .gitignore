@@ -8,3 +8,9 @@ data/
 testing_notebooks/
 testing_notebooks/
 *.vscode/
+my-solutions/day-07-customer-intelligence/notebook.ipynb
+nlp/
+modelTACO/
+challenge.md
+Dockerfile.txt
+*.ipynb

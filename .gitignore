@@ -14,3 +14,4 @@ modelTACO/
 challenge.md
 Dockerfile.txt
 *.ipynb
+*.pytest_cache/

@@ -13,16 +13,19 @@ class EpsilonGreedyAgent:
     
     
     def select_arm(self):
-        if np.random.random() > self.epsilon:
-            return np.argmax(self.n_arms)
-        else:
-            return np.random.choice(len(self.q_values))
+        if self.rng.random() < self.epsilon:
+            return int(self.rng.integers(self.n_arms))
+        return int(np.argmax(self.q_values))
     
     def update_epsilon(self,new_epsilon):
         self.epsilon = new_epsilon
         return 
     
-    def update_arm(self, k_arm, reward):
+    def select(self, x=None):
+        return self.select_arm()
+    
+    
+    def update(self, k_arm, reward, x=None):
         self.counts[k_arm] = self.counts[k_arm] + 1
         n = self.counts[k_arm]
         
@@ -36,21 +39,17 @@ class UCBAgent:
         self.n_arms = n_arms
         self.counts = np.zeros(n_arms)
         self.values = np.zeros(n_arms)
-        self.c = 2
-    
-    def init_arms_ucb(self, k_arms):
-        self.counts = np.ones(k_arms)
-        self.values = np.ones(k_arms)
-        return
+        self.c = 1
     
     def select_arm(self):
-        total_counts = sum(self.counts)
-        ucb_values = np.ones(self.n_arms)
-        for arm in range(self.n_arms):
-            ucb_values[arm] = self.values[arm] + np.sqrt(self.c * np.log(total_counts/self.counts[arm]))
-        return np.argmax(ucb_values)
+        for a in range(self.n_arms):          # pull each arm once first
+            if self.counts[a] == 0:
+                return a
+        t = self.counts.sum()
+        bonus = np.sqrt(self.c * np.log(t) / self.counts)
+        return int(np.argmax(self.values + bonus))
     
-    def update_arm(self, arm, reward):
+    def update(self, arm, reward):
         self.counts[arm] += 1
         n = self.counts[arm]
         
@@ -58,62 +57,6 @@ class UCBAgent:
         new_value = ((n - 1) / float(n)) * value + (1 / float(n)) * reward
         self.values[arm] = new_value
         return
-    
-class EpsilonGreedyAgentCopilot:
-    """
-    Classic epsilon-greedy for bounded rewards.
-    """
-
-    def __init__(self, n_arms, epsilon=0.1, seed=42):
-        self.n_arms = n_arms
-        self.epsilon = float(epsilon)
-        self.rng = np.random.default_rng(seed)
-
-        self.counts = np.zeros(n_arms, dtype=int)
-        self.q_values = np.zeros(n_arms, dtype=float)
-
-    def select_arm(self):
-        if self.rng.random() < self.epsilon:
-            return int(self.rng.integers(0, self.n_arms))
-        return int(np.argmax(self.q_values))
-
-    def update(self, arm, reward):
-        self.counts[arm] += 1
-        n = self.counts[arm]
-        q = self.q_values[arm]
-        # incremental mean
-        self.q_values[arm] = q + (reward - q) / n
-
-
-class UCB1AgentCopilot:
-    """
-    Upper Confidence Bound (UCB1):
-    pick arm maximizing q_i + sqrt(2 log t / n_i)
-    """
-
-    def __init__(self, n_arms):
-        self.n_arms = n_arms
-        self.counts = np.zeros(n_arms, dtype=int)
-        self.q_values = np.zeros(n_arms, dtype=float)
-        self.t = 0
-
-    def select_arm(self):
-        self.t += 1
-
-        # pull each arm once first
-        for a in range(self.n_arms):
-            if self.counts[a] == 0:
-                return a
-
-        bonus = np.sqrt((2.0 * np.log(self.t)) / self.counts)
-        ucb = self.q_values + bonus
-        return int(np.argmax(ucb))
-
-    def update(self, arm, reward):
-        self.counts[arm] += 1
-        n = self.counts[arm]
-        q = self.q_values[arm]
-        self.q_values[arm] = q + (reward - q) / n
 
 class ThompsonSamplingBernoulliAgent:
     """
@@ -124,9 +67,10 @@ class ThompsonSamplingBernoulliAgent:
     - If your environment returns reward = success - cost, pass success separately.
     """
 
-    def __init__(self, n_arms, seed=42, alpha0=1.0, beta0=1.0):
+    def __init__(self, n_arms, costs,seed=42, alpha0=1.0, beta0=1.0):
         self.n_arms = n_arms
         self.rng = np.random.default_rng(seed)
+        self.costs = np.asarray(costs, dtype=float)
 
         self.alpha = np.ones(n_arms, dtype=float) * alpha0
         self.beta = np.ones(n_arms, dtype=float) * beta0
@@ -136,8 +80,7 @@ class ThompsonSamplingBernoulliAgent:
         self.reward_means = np.zeros(n_arms, dtype=float)
 
     def select_arm(self):
-        samples = self.rng.beta(self.alpha, self.beta)
-        return int(np.argmax(samples))
+        return int(np.argmax(self.rng.beta(self.alpha, self.beta) - self.costs))
 
     def update(self, arm, reward, success=None):
         """

@@ -6,9 +6,9 @@
 | 2 | | ✅ | | | |
 | 3 | | ✅ | | | |
 | 4 | | ✅ | | | |
-| 5 (Model 1) | | not started | | | |
-| 6 | | not started | | | |
-| 7 | | not started | | | |
+| 5 (Model 1) | | ✅ | Almost | Had AI turn my notebook into a python script | |
+| 6 | | 🤡 bug: rfm score | | | |
+| 7 | | 🤡 bug: str | | | |
 | 8 | | not started | | | |
 | 9 | | not started | | | |
 | 10 (Model 2) | | | | | |

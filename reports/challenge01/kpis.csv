@@ -1,0 +1,14 @@
+,value
+gross_revenue,10272118.873
+cancelled_value,478724.18000000005
+net_revenue,9793394.693
+orders,19773.0
+customers,4334.0
+products_sold,3913.0
+units_sold,5577136.0
+units_cancelled,272030.0
+avg_order_value,519.5022946947857
+items_per_order_units,282.05816011733174
+cancellation_rate_value,0.04660422897347053
+cancellation_rate_orders,0.17306427957315532
+revenue_share_missing_customer,0.14710229103478947

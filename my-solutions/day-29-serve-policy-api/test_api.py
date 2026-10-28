@@ -1,17 +1,11 @@
 
 from fastapi.testclient import TestClient
-import os, sys
-current = os.path.dirname(os.path.realpath(__file__))
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-# Getting the parent directory name
-# where the current directory is present.
-parent = os.path.dirname(current)
-
-# adding the parent directory to 
-# the sys.path.
-sys.path.append(parent)
-from service.app import app
-
+from app import app
+from src.bandits.contextual import LinUCB
 client = TestClient(app)
 
 

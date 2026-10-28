@@ -12,7 +12,7 @@ Artifacts:
 - writes logs/feedback.jsonl
 
 Run:
-  uvicorn app.service.app:app --reload --port 8000
+PYTHONPATH=. uvicorn app:app --app-dir my-solutions/day-30-serve-policy-api --port 8000
 """
 
 from pathlib import Path
@@ -25,15 +25,22 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, confloat
 from typing import Annotated
 import os, sys
+from pathlib import Path
+import joblib
+from src.bandits.contextual import LinUCB  # noqa: F401  (needed to unpickle the policy)
+
+ROOT = Path(__file__).resolve().parents[2]      # repo root
+MODEL_PATH = ROOT / "models" / "policy.joblib"
+LOG_DIR = ROOT / "data" / "rfl" / "logs"
 
 # -------------------------
 # Config (edit here)
 # -------------------------
-MODEL_PATH = Path("models/policy.joblib")
+MODEL_PATH = Path("/Users/nooralindeflaten/30-days-of-code/data/rfl/models/policy.joblib")
 LOG_DIR = Path("data/rfl/logs")
 DECISION_LOG = LOG_DIR / "decisions.jsonl"
 FEEDBACK_LOG = LOG_DIR / "feedback.jsonl"
-POLICY_VERSION = "day28-linucb-v1"
+POLICY_VERSION = "linucb"
 
 N_ARMS = 4   # must match day28 policy
 D = 5        # context size x0..x4
@@ -61,6 +68,7 @@ class DecideRequest(BaseModel):
     x1: Annotated[float, Field(strict=True, ge=-10, le=10)]
     x2: Annotated[float, Field(strict=True, ge=-10, le=10)]
     x3: Annotated[float, Field(strict=True, ge=-10, le=10)]
+    x4: Annotated[float, Field(strict=True, ge=-10, le=10)]
     
 
 

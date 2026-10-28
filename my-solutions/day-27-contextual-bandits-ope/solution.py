@@ -22,7 +22,7 @@ Outputs:
 - reports/day28/summary.csv
 
 Run:
-  python -m src.bandits.workflows_day28_contextual_bandits_ope_Version2
+PYTHONPATH=. python my-solutions/day-28-contextual-bandits-ope/solution.py
 """
 
 from pathlib import Path
@@ -30,7 +30,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import joblib
+import os, sys
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
+
+from src.bandits.contextual import LinUCB
+from src.bandits.agents import EpsilonGreedyAgent
+from src.bandits.env import ContextualLinearBandit
 # ---------------------------
 # Config
 # ---------------------------
@@ -45,126 +51,21 @@ EPS = 0.1                # epsilon-greedy for non-contextual baseline
 LOGGER_EPS = 0.20        # logging policy exploration (must be > 0 for support)
 
 OUT_REPORT = Path("data/rfl/reports/day28")
-OUT_DATA = Path("data/rfl/data")
+OUT_DATA = Path("data/rfl")
 OUT_MODEL = Path("models")
 OUT_REPORT.mkdir(parents=True, exist_ok=True)
 OUT_DATA.mkdir(parents=True, exist_ok=True)
 OUT_MODEL.mkdir(parents=True, exist_ok=True)
 
-
-# ---------------------------
-# Contextual environment
-# ---------------------------
-class ContextualLinearBanditEnv:
-    """
-    True expected reward for arm a under context x:
-      E[r | x,a] = sigmoid(x @ w_a) - cost_a
-
-    Observed reward:
-      r = Bernoulli(sigmoid(x @ w_a)) - cost_a
-    """
-    def __init__(self, n_arms=4, d=5, seed=42):
-        self.n_arms = n_arms
-        self.d = d
-        self.rng = np.random.default_rng(seed)
-
-        # arm parameters (hidden truth)
-        self.W = self.rng.normal(0, 0.9, size=(n_arms, d))
-        self.costs = np.array([0.35, 0.22, 0.11, 0.03], dtype=float)[:n_arms]
-
-    @staticmethod
-    def _sigmoid(z):
-        return 1.0 / (1.0 + np.exp(-z))
-
-    def sample_context(self):
-        # simple synthetic request features
-        return self.rng.normal(0, 1, size=self.d)
-
-    def expected_rewards(self, x):
-        p = self._sigmoid(self.W @ x)          # success probs by arm
-        return p - self.costs                  # net expected reward
-
-    def best_arm(self, x):
-        mu = self.expected_rewards(x)
-        return int(np.argmax(mu)), float(np.max(mu))
-
-    def step(self, x, arm):
-        mu = self.expected_rewards(x)[arm] + self.costs[arm]  # success prob before cost subtraction
-        success = 1.0 if self.rng.random() < mu else 0.0
-        reward = success - self.costs[arm]
-        return float(reward), int(success)
-
-
-# ---------------------------
-# Agents
-# ---------------------------
-class EpsilonGreedyMean:
-    """Non-contextual baseline: estimates one mean reward per arm."""
-    def __init__(self, n_arms, epsilon=0.1, seed=42):
-        self.n_arms = n_arms
-        self.epsilon = epsilon
-        self.rng = np.random.default_rng(seed)
-        self.counts = np.zeros(n_arms, dtype=int)
-        self.q = np.zeros(n_arms, dtype=float)
-
-    def select(self, x=None):
-        if self.rng.random() < self.epsilon:
-            return int(self.rng.integers(0, self.n_arms))
-        return int(np.argmax(self.q))
-
-    def update(self, arm, reward, x=None):
-        self.counts[arm] += 1
-        n = self.counts[arm]
-        self.q[arm] += (reward - self.q[arm]) / n
-
-
-class LinUCB:
-    """
-    Per-arm linear model with confidence bonus:
-      p_a(x) = x^T theta_a + alpha * sqrt(x^T A_a^{-1} x)
-    """
-    def __init__(self, n_arms, d, alpha=1.0):
-        self.n_arms = n_arms
-        self.d = d
-        self.alpha = alpha
-
-        self.A = np.array([np.eye(d) for _ in range(n_arms)])    # (K,d,d)
-        self.b = np.zeros((n_arms, d), dtype=float)
-
-    def _score(self, arm, x):
-        A_inv = np.linalg.inv(self.A[arm])
-        theta = A_inv @ self.b[arm]
-        exploit = float(x @ theta)
-        explore = float(np.sqrt(x @ A_inv @ x))
-        return exploit + self.alpha * explore
-
-    def select(self, x):
-        scores = [self._score(a, x) for a in range(self.n_arms)]
-        return int(np.argmax(scores))
-
-    def update(self, arm, reward, x):
-        self.A[arm] += np.outer(x, x)
-        self.b[arm] += reward * x
-
-    def expected_reward_hat(self, x):
-        # model-based expected reward estimates for DR
-        out = np.zeros(self.n_arms, dtype=float)
-        for a in range(self.n_arms):
-            A_inv = np.linalg.inv(self.A[a])
-            theta = A_inv @ self.b[a]
-            out[a] = x @ theta
-        return out
-
-
 # ---------------------------
 # Utilities
 # ---------------------------
 def one_run(env_seed, agent_type):
-    env = ContextualLinearBanditEnv(n_arms=N_ARMS, d=D, seed=env_seed)
+    env = ContextualLinearBandit(n_arms=N_ARMS, d=D, seed=env_seed)
     if agent_type == "linucb":
         agent = LinUCB(n_arms=N_ARMS, d=D, alpha=ALPHA)
     elif agent_type == "egreedy_noncontext":
-        agent = EpsilonGreedyMean(n_arms=N_ARMS, epsilon=EPS, seed=env_seed)
+        agent = EpsilonGreedyAgent(n_arms=N_ARMS, epsilon=EPS, seed=env_seed)
     elif agent_type == "best_fixed":
         # oracle best fixed arm by Monte Carlo on contexts
         # pick one arm and stick to it
@@ -211,7 +112,7 @@ def generate_logged_data(seed=123, n=12000, logger_eps=0.2):
     Logging policy: epsilon-mixture of greedy wrt true expected reward and uniform random.
     We store propensity explicitly for OPE.
     """
-    env = ContextualLinearBanditEnv(n_arms=N_ARMS, d=D, seed=seed)
+    env = ContextualLinearBandit(n_arms=N_ARMS, d=D, seed=seed)
     rows = []
 
     for _ in range(n):
@@ -296,7 +197,7 @@ def estimate_dr(log_df, target_policy, reward_model_policy):
 
 
 def true_policy_value(env_seed, policy, n=10000):
-    env = ContextualLinearBanditEnv(n_arms=N_ARMS, d=D, seed=env_seed)
+    env = ContextualLinearBandit(n_arms=N_ARMS, d=D, seed=env_seed)
     vals = []
     for _ in range(n):
         x = env.sample_context()

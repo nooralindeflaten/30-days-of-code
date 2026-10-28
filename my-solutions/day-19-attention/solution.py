@@ -2,14 +2,14 @@
 Day 20 — Attention model vs Day 19 GRU baseline on frozen Day 17 split.
 
 Outputs (under data/banking77/artifacts):
-- results/day20_attention_metrics.csv
-- results/day20_val_predictions.csv
-- results/day20_error_migration_vs_day19.csv
-- results/day20_targeted_confusions.csv
-- results/day20_attention_examples.csv
-- results/day20_confusion_pairs.csv
-- results/day20_training_history.csv
-- models/day20_attention_model.pt
+- results/day19_attention_metrics.csv
+- results/day19_val_predictions.csv
+- results/day19_error_migration_vs_day19.csv
+- results/day19_targeted_confusions.csv
+- results/day19_attention_examples.csv
+- results/day19_confusion_pairs.csv
+- results/day19_training_history.csv
+- models/day19_attention_model.pt
 """
 
 import copy
@@ -390,7 +390,7 @@ def main():
         y_pred=y_pred,
         y_score=ev["score"],
     )
-    pred_df.to_csv(RES / "day20_val_predictions.csv", index=False)
+    pred_df.to_csv(RES / "day19_val_predictions.csv", index=False)
 
     # 11) Metrics compare Day 19 vs Day 20
     m20 = classification_summary(pred_df["true_intent"], pred_df["predicted_intent"])
@@ -398,24 +398,24 @@ def main():
 
     metrics_df = pd.DataFrame([
         {"model": "day19_gru", **m19},
-        {"model": "day20_gru_attention", **m20},
+        {"model": "day19_gru_attention", **m20},
     ])
     metrics_df["delta_vs_day19"] = metrics_df["macro_f1"] - m19["macro_f1"]
-    metrics_df.to_csv(RES / "day20_attention_metrics.csv", index=False)
+    metrics_df.to_csv(RES / "day19_attention_metrics.csv", index=False)
 
     # 12) confusion + targeted confusions
     conf20 = directed_confusion_pairs(
         pred_df["true_intent"], pred_df["predicted_intent"],
         labels=sorted(train["intent"].unique())
     )
-    conf20.to_csv(RES / "day20_confusion_pairs.csv", index=False)
+    conf20.to_csv(RES / "day19_confusion_pairs.csv", index=False)
 
     targeted = targeted_confusion_delta(day17_conf, pred_df, top_k=10)
-    targeted.to_csv(RES / "day20_targeted_confusions.csv", index=False)
+    targeted.to_csv(RES / "day19_targeted_confusions.csv", index=False)
 
     # 13) Migration vs Day 19
     mig = error_migration(day19_preds, pred_df)
-    mig.to_csv(RES / "day20_error_migration_vs_day19.csv", index=False)
+    mig.to_csv(RES / "day19_error_migration_vs_day19.csv", index=False)
 
     # 14) attention examples
     attn_examples = build_attention_examples(
@@ -424,14 +424,14 @@ def main():
         attn_list=ev["attn"],
         n=ATTN_EXAMPLES
     )
-    attn_examples.to_csv(RES / "day20_attention_examples.csv", index=False)
+    attn_examples.to_csv(RES / "day19_attention_examples.csv", index=False)
 
     # 15) Save model and run metadata
-    pd.DataFrame(history).to_csv(RES / "day20_training_history.csv", index=False)
+    pd.DataFrame(history).to_csv(RES / "day19_training_history.csv", index=False)
     per_class_report_df(
         pred_df["true_intent"], pred_df["predicted_intent"],
         labels=labels, target_names=[str(x) for x in labels]
-    ).to_csv(RES / "day20_per_class_report.csv")
+    ).to_csv(RES / "day19_per_class_report.csv")
 
     torch.save(
         {
@@ -448,10 +448,10 @@ def main():
                 "architecture": "gru_additive_attention",
             },
         },
-        MOD / "day20_attention_model.pt",
+        MOD / "day19_attention_model.pt",
     )
 
-    with open(RES / "day20_run_metadata.json", "w", encoding="utf-8") as f:
+    with open(RES / "day19_run_metadata.json", "w", encoding="utf-8") as f:
         json.dump(
             {
                 "seed": SEED,

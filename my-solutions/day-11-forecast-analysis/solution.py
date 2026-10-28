@@ -4,184 +4,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-"""
-# Challenge 01 — Retail Demand Diagnosis (Foundation)
-
-## Purpose
-
-Build a compact, reusable understanding of demand behavior and produce the artifacts that all later challenges will reuse.
-
-This challenge starts the 5-day connected workflow.
-
----
-
-## Business Question
-
-**What demand behaviors are likely to make forecasting difficult, and how should those findings shape the baseline and ML work in the next days?**
-
----
-
-## Scope (keep this day realistic)
-
-Use the **M5 Forecasting — Accuracy** dataset and focus on:
-
-- `sales_train_validation.csv`
-- `calendar.csv`
-- `sell_prices.csv`
-
-Use historical data only. Do not use the future evaluation period.
-
-To keep the challenge feasible in one day, use either:
-
-- a clearly documented subset (recommended), or
-- full data with efficient processing.
-
-Do not commit raw competition files.
-
----
-
-## Inputs
-
-- Raw M5 files (local, gitignored)
-
-## Outputs (used by Day 13+)
-
-1. `data/processed/sales_long.parquet` (or equivalent tidy historical dataset)
-2. `data/processed/series_profile.csv` with at minimum:
-   - `series_id` (item-store)
-   - total sales (historical)
-   - zero-sales rate
-   - volume segment (e.g., low/medium/high)
-   - intermittency segment (e.g., low/medium/high)
-3. `outputs/day-12-demand-diagnosis-summary.md` (short written summary)
-
----
-
-## Tasks
-
-### 1) Build a reusable data foundation
-
-Create a clean, analysis-ready historical table.
-
-At minimum include:
-
-- date
-- demand (units sold)
-- item / department / category
-- store / state
-- available calendar fields
-- available price fields
-
-Keep memory usage practical and document your choices briefly.
-
----
-
-### 2) Quick hierarchy and data-quality overview
-
-Report only the essential structure:
-
-- number of products
-- departments and categories
-- stores and states
-- number of item-store series
-- historical length
-
-Also note key quality observations (e.g., missingness patterns, sparse demand prevalence).
-
----
-
-### 3) Analyze aggregate demand behavior
-
-Create one concise time-series view of total demand including:
-
-- daily total demand
-- 7-day smoothed trend
-- 28-day smoothed trend
-
-Briefly comment on trend, volatility, and obvious structural shifts.
-
----
-
-### 4) Analyze seasonality and concentration
-
-Identify whether demand shows meaningful patterns by:
-
-- weekday
-- month
-
-Then assess concentration (e.g., cumulative share of sales by series) to determine whether a minority of series drives most volume.
-
----
-
-### 5) Create intermittency and volume segments
-
-For each item-store series, compute:
-
-- zero-sales rate
-- total historical volume
-
-Create practical segments (for reuse in Days 13–16), and save them in `series_profile.csv`.
-
----
-
-### 6) Check potential external signals
-
-Run a lightweight exploratory check for associations with:
-
-- calendar events / event types
-- SNAP
-- price variation
-
-Do not claim causality.
-
----
-
-## Deliverables (limit to essentials)
-
-1. Short hierarchy + data-quality overview
-2. One aggregate demand chart (with 7-day and 28-day smoothing)
-3. One seasonality view (weekday and/or month)
-4. One concentration view
-5. `series_profile.csv` with reusable segments
-6. A concise summary of forecasting implications
-
----
-
-## Final Questions
-
-Answer briefly:
-
-1. Is demand stable over time?
-2. Is seasonality meaningful enough to inform lag features?
-3. How severe is intermittency?
-4. Is sales volume concentrated among a small share of series?
-5. Which external variables look potentially useful for forecasting?
-6. What should baseline models (Day 13) explicitly account for?
-
----
-
-## Timebox
-
-Target: **3–5 hours**.
-
-If time is limited, prioritize:
-
-1. reusable dataset
-2. series segmentation
-3. aggregate + seasonality insights
-
----
-
-## Constraint
-
-Do **not** build forecasting models yet.
-
-Goal: understand the problem and prepare reusable inputs for the next challenges.
-
-
-"""
-
-
 FORECAST_DAYS = 28
 
 import os
@@ -201,7 +23,7 @@ sns.set_theme(style="whitegrid")
 # ----------------------------
 RAW_DIR = Path("data/m5-forecasting-accuracy/")
 PROCESSED_DIR = RAW_DIR / "processed/"
-OUTPUT_DIR = RAW_DIR / "day-12/"
+OUTPUT_DIR = RAW_DIR / "day-11/"
 
 SALES_FP = RAW_DIR / "sales_train_validation.csv"
 CAL_FP = RAW_DIR / "calendar.csv"
@@ -531,9 +353,9 @@ summary_md = f"""# Day 12 Demand Diagnosis Summary
 4. Prefer scale-aware metrics (e.g., RMSSE) due to concentration and volume imbalance.
 """
 
-summary_fp = OUTPUT_DIR / "day-12-demand-diagnosis-summary.md"
+summary_fp = OUTPUT_DIR / "day-11-demand-diagnosis-summary.md"
 with open(summary_fp, "w", encoding="utf-8") as f:
     f.write(summary_md)
 
 print(f"Saved: {summary_fp}")
-print("\nDay 12 completed.")
+print("\nDay 11 completed.")

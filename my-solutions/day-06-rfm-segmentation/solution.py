@@ -1,406 +1,394 @@
-# %% [markdown]
-# # Challenge 01 — E-Commerce Business Diagnosis
-# UK-based online retailer, ~1 year of transactions (UCI Online Retail dataset)
-
-# %%
-from ucimlrepo import fetch_ucirepo
-import pandas as pd
+from pathlib import Path
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-import datetime as dt
 
-pd.set_option("display.float_format", lambda x: f"{x:,.2f}")
+try:
+    from ucimlrepo import fetch_ucirepo
+except ImportError as e:
+    raise ImportError(
+        "Please install ucimlrepo first: pip install ucimlrepo"
+    ) from e
 
-# %% [markdown]
-# ## 1. Audit the raw data
-# We look before we touch anything: dimensions, dtypes, missingness, duplicates,
-# and the specific data-quality flags the brief calls out. Nothing gets dropped
-# in this section.
 
-# %%
-online_retail = fetch_ucirepo(id=352)
-data = online_retail.data.original
-df = data.copy()
+OUT = Path("data/rfm/reports/day6")
+OUT.mkdir(parents=True, exist_ok=True)
 
-df["IsCancellation"] = df["InvoiceNo"].astype(str).str.upper().str.startswith("C")
-df["InvoiceDate"] = pd.to_datetime(df["InvoiceDate"])
-df["Revenue"] = df["Quantity"] * df["UnitPrice"]
-
-audit = {
-    "dataset_dimensions": df.shape,
-    "dtypes": df.dtypes.to_dict(),
-    "missing_values": df.isnull().sum().to_dict(),
-    "duplicate_rows": int(df.duplicated().sum()),
-    "missing_customer_id": int(df["CustomerID"].isnull().sum()),
-    "missing_description": int(df["Description"].isnull().sum()),
-    "zero_or_negative_qty": int((df["Quantity"] <= 0).sum()),
-    "zero_or_negative_price": int((df["UnitPrice"] <= 0).sum()),
-    "cancellation_rows": int(df["IsCancellation"].sum()),
+NON_PRODUCT_CODES = {
+    "POST", "D", "M", "DOT", "BANK CHARGES", "CRUK", "C2",
+    "AMAZONFEE", "S", "B", "ADJUST", "ADJUST2", "TEST001", "TEST002"
 }
+MIN_COUNTRY_CUSTOMERS = 5
 
-print("=== DATA QUALITY AUDIT ===")
-for k, v in audit.items():
-    if k not in ("dtypes", "missing_values"):
-        print(f"{k}: {v}")
-print("\nDtypes:\n", df.dtypes)
-print("\nMissing values per column:\n", df.isnull().sum())
 
-# Are missing descriptions and missing CustomerIDs the same rows, or different problems?
-missing_desc_no_custid = df[df["Description"].isnull() & df["CustomerID"].isnull()].shape[0]
-missing_desc_total = df["Description"].isnull().sum()
-print(f"\nRows missing BOTH Description and CustomerID: {missing_desc_no_custid} / {missing_desc_total} missing-description rows")
+def load_data():
+    online_retail = pd.read_parquet('data/rfm/online_retail.parquet')
+    df = online_retail.copy()
 
-# StockCodes tied to missing descriptions — are they real products or adjustments (POST, D, M, BANK CHARGES, etc.)?
-missing_description_stockcodes = df[df["Description"].isnull()]["StockCode"].unique()
-print(f"\nStockCodes with missing descriptions: {missing_description_stockcodes[:20]}")
+    df["InvoiceNo"] = df["InvoiceNo"].astype(str).str.upper()
+    df["StockCode"] = df["StockCode"].astype(str).str.strip()
+    df["InvoiceDate"] = pd.to_datetime(df["InvoiceDate"])
+    df["Revenue"] = df["Quantity"] * df["UnitPrice"]
+    df["IsCancellation"] = df["InvoiceNo"].str.upper().str.startswith("C")
+    df["NonProduct"] = df["StockCode"].str.upper().isin(NON_PRODUCT_CODES)
+    return df
 
-# Zero/negative quantity and price rows — inspect what they actually are before deciding
-zero_quantity = df[df["Quantity"] <= 0]
-zero_price = df[df["UnitPrice"] <= 0]
-print(f"\nZero/negative Quantity rows: {zero_quantity.shape[0]} "
-      f"({(zero_quantity['IsCancellation']).sum()} are cancellations)")
-print(f"Zero/negative UnitPrice rows: {zero_price.shape[0]} "
-      f"(sample StockCodes: {zero_price['StockCode'].unique()[:10]})")
 
-cancellation_example = df[df["IsCancellation"]].head(5)
-print("\nSample cancellation rows:\n", cancellation_example)
+def run_audit(df):
+    lines = ["# Data Quality Audit", ""]
 
-# %% [markdown]
-# **Audit takeaways (documented, not yet acted on):**
-# - Missing `CustomerID` rows cannot be used for any *customer-level* analysis
-#   (RFM, concentration, cohort work) but CAN still count toward gross revenue
-#   if we're only answering "how much did the business sell."
-# - Missing `Description` rows are almost always non-product adjustment codes
-#   (postage, bank charges, manual entries) rather than real inventory — these
-#   should not be treated as ordinary products in product-performance analysis.
-# - Negative/zero `Quantity` overlaps heavily with cancellations (expected: a
-#   cancellation is a negative-quantity entry against a prior order) — but not
-#   perfectly, so we check both instead of assuming full overlap.
-# - Zero `UnitPrice` rows are typically non-sale adjustments (samples, damages,
-#   free items) — they contribute zero revenue by construction, so they don't
-#   need to be dropped, they just naturally fall out of revenue sums.
+    lines.append(f"- Shape: {df.shape[0]:,} rows x {df.shape[1]} columns")
+    lines.append(f"- Date range: {df['InvoiceDate'].min()} to {df['InvoiceDate'].max()}")
+    lines.append("")
+    lines.append("## Missing values")
+    lines.append("```")
+    lines.append(df.isna().sum().to_string())
+    lines.append("```")
+    lines.append("")
 
-# %% [markdown]
-# ## 2. Define valid purchases
-# **Definition used in this analysis:**
-# - **Completed purchase** = not a cancellation AND `Quantity > 0` AND `UnitPrice > 0`
-#   AND has a non-null `CustomerID` (for customer-level metrics) — for
-#   business-wide KPIs that don't require a customer, we relax the CustomerID
-#   requirement.
-# - **Cancellation / return** = InvoiceNo starts with `C` (regardless of
-#   quantity/price sign) — kept as its own group, not discarded, because it
-#   feeds cancellation-rate metrics later.
-# - **Unusable / ambiguous** = missing `Description` with non-numeric
-#   `StockCode` (adjustment/admin codes like POST, D, M, BANK CHARGES) — these
-#   are excluded from *product* performance analysis but may still count in
-#   revenue totals since money still changed hands.
+    lines.append(f"- Duplicate rows: {df.duplicated().sum():,}")
+    lines.append(f"- Missing CustomerID rows: {df['CustomerID'].isna().sum():,}")
+    lines.append(f"- Missing Description rows: {df['Description'].isna().sum():,}")
+    lines.append(f"- Quantity <= 0 rows: {(df['Quantity'] <= 0).sum():,}")
+    lines.append(f"- UnitPrice <= 0 rows: {(df['UnitPrice'] <= 0).sum():,}")
+    lines.append(f"- Cancellation rows: {df['IsCancellation'].sum():,}")
+    lines.append(f"- Non-product code rows: {df['NonProduct'].sum():,}")
+    lines.append("")
 
-# %%
-df_clean = df.dropna(subset=["CustomerID", "Description"]).copy()
-df_clean.drop_duplicates(inplace=True)
-print("Cleaned dataset dimensions:", df_clean.shape)
+    lines.append("## Analysis impact")
+    lines.append("- Missing CustomerID affects only customer-level analysis.")
+    lines.append("- Cancellation rows are preserved for net revenue and cancellation analysis.")
+    lines.append("- Non-positive quantity/price and non-product codes are excluded from valid purchases.")
+    lines.append("- Duplicates are reported; not removed blindly.")
 
-customer_transactions = df_clean.copy()
+    (OUT / "audit.md").write_text("\n".join(lines), encoding="utf-8")
 
-purchases = customer_transactions.loc[
-    (~customer_transactions["IsCancellation"])
-    & (customer_transactions["Quantity"] > 0)
-    & (customer_transactions["UnitPrice"] > 0)
-].copy()
 
-cancellations_raw = customer_transactions.loc[customer_transactions["IsCancellation"]].copy()
-# Numeric-stockcode cancellations = real product returns (vs. admin/adjustment cancellations)
-cancellations = cancellations_raw[cancellations_raw["StockCode"].str.isnumeric()].copy()
+def classify_records(df):
+    is_purchase = (
+        (~df["IsCancellation"])
+        & (df["Quantity"] > 0)
+        & (df["UnitPrice"] > 0)
+        & (~df["NonProduct"])
+    )
+    is_cancellation = (
+        (df["IsCancellation"])
+        & (df["Quantity"] < 0)
+        & (df["UnitPrice"] > 0)
+        & (~df["NonProduct"])
+    )
 
-print(f"Completed purchases: {purchases.shape[0]:,} rows")
-print(f"Cancellations (all): {cancellations_raw.shape[0]:,} rows")
-print(f"Cancellations (real product returns, numeric StockCode): {cancellations.shape[0]:,} rows")
+    df = df.copy()
+    df["RecordType"] = np.select(
+        [is_purchase, is_cancellation],
+        ["purchase", "cancellation"],
+        default="ambiguous"
+    )
+    df["Month"] = df["InvoiceDate"].dt.to_period("M").dt.to_timestamp()
 
-# %% [markdown]
-# ## 3. Business KPIs
-# Gross vs. net is the key distinction the brief asks for: gross = all sales
-# activity before subtracting returns; net = what the business actually keeps.
+    summary = (
+        df.groupby("RecordType")
+        .agg(rows=("InvoiceNo", "size"), value=("Revenue", "sum"))
+        .reset_index()
+    )
+    summary.to_csv(OUT / "record_classification.csv", index=False)
 
-# %%
-gross_revenue = customer_transactions.loc[customer_transactions["Quantity"] > 0, "Revenue"].sum()
-cancellation_value = cancellations["Revenue"].abs().sum()  # cancellations store negative revenue
-net_revenue = purchases["Revenue"].sum()  # equivalent to gross - cancellations restricted to real returns
+    purchases = df[df["RecordType"] == "purchase"].copy()
+    cancellations = df[df["RecordType"] == "cancellation"].copy()
+    cancellations["CancelValue"] = -cancellations["Revenue"]
+    cancellations["CancelUnits"] = -cancellations["Quantity"]
 
-num_orders = purchases["InvoiceNo"].nunique()
-num_customers = purchases["CustomerID"].nunique()
-num_products_sold = purchases["StockCode"].nunique()
-units_sold = purchases["Quantity"].sum()
-avg_order_value = net_revenue / num_orders
-items_per_order = units_sold / num_orders
+    return df, purchases, cancellations
 
-total_invoices_all = customer_transactions["InvoiceNo"].nunique()
-cancelled_invoices = cancellations_raw["InvoiceNo"].nunique()
-cancellation_rate = cancelled_invoices / total_invoices_all
 
-kpi_summary = pd.Series({
-    "Gross Revenue (£)": gross_revenue,
-    "Cancellation Value (£)": cancellation_value,
-    "Net Revenue (£)": net_revenue,
-    "Number of Orders (completed)": num_orders,
-    "Number of Customers": num_customers,
-    "Number of Distinct Products Sold": num_products_sold,
-    "Units Sold": units_sold,
-    "Average Order Value (£)": avg_order_value,
-    "Items per Order": items_per_order,
-    "Total Invoices (incl. cancellations)": total_invoices_all,
-    "Cancelled Invoices": cancelled_invoices,
-    "Cancellation Rate": cancellation_rate,
-})
+def compute_kpis(purchases, cancellations):
+    gross_revenue = purchases["Revenue"].sum()
+    cancelled_value = cancellations["CancelValue"].sum()
+    net_revenue = gross_revenue - cancelled_value
 
-print("=== KPI SUMMARY ===")
-print(kpi_summary.to_string())
+    orders = purchases["InvoiceNo"].nunique()
+    cancellation_invoices = cancellations["InvoiceNo"].nunique()
 
-# %% [markdown]
-# ## 4. Revenue over time
-# Monthly granularity (dataset spans ~1 year, so monthly is the natural
-# resolution for spotting trend/seasonality without over-fitting to noise).
+    kpis = {
+        "gross_revenue": gross_revenue,
+        "cancelled_value": cancelled_value,
+        "net_revenue": net_revenue,
+        "orders": orders,
+        "customers": purchases["CustomerID"].nunique(),
+        "products_sold": purchases["StockCode"].nunique(),
+        "units_sold": purchases["Quantity"].sum(),
+        "units_cancelled": cancellations["CancelUnits"].sum(),
+        "avg_order_value": gross_revenue / orders if orders else np.nan,
+        "items_per_order_units": purchases["Quantity"].sum() / orders if orders else np.nan,
+        "cancellation_rate_value": cancelled_value / gross_revenue if gross_revenue else np.nan,
+        "cancellation_rate_orders": cancellation_invoices / orders if orders else np.nan,
+        "revenue_share_missing_customer": (
+            purchases.loc[purchases["CustomerID"].isna(), "Revenue"].sum() / gross_revenue
+            if gross_revenue else np.nan
+        ),
+    }
 
-# %%
-purchases["Month"] = purchases["InvoiceDate"].dt.to_period("M")
+    pd.Series(kpis).to_csv(OUT / "kpis.csv", header=["value"])
+    return kpis
 
-monthly = (
-    purchases.groupby("Month")
-    .agg(
+
+def revenue_over_time(purchases, cancellations):
+    monthly = purchases.groupby("Month").agg(
         Revenue=("Revenue", "sum"),
         Orders=("InvoiceNo", "nunique"),
         Customers=("CustomerID", "nunique"),
         UnitsSold=("Quantity", "sum"),
         ProductsSold=("StockCode", "nunique"),
     )
-)
-monthly.index = monthly.index.to_timestamp()
 
-monthly["AverageOrderValue"] = monthly["Revenue"] / monthly["Orders"]
-monthly["OrdersPerCustomer"] = monthly["Orders"] / monthly["Customers"]
-monthly["ItemsPerOrder"] = monthly["UnitsSold"] / monthly["Orders"]
-monthly["RevenuePerItem"] = monthly["Revenue"] / monthly["UnitsSold"]
-monthly["RevenueGrowthPct"] = monthly["Revenue"].pct_change() * 100
+    # FIX 1: OrdersPerCustomer must use orders from known customers only
+    known_orders = (
+        purchases.dropna(subset=["CustomerID"])
+        .groupby("Month")["InvoiceNo"].nunique()
+    )
 
-print(monthly)
+    monthly["AverageOrderValue"] = monthly["Revenue"] / monthly["Orders"]
+    monthly["OrdersPerCustomer"] = known_orders / monthly["Customers"]
+    monthly["ItemsPerOrder"] = monthly["UnitsSold"] / monthly["Orders"]
+    monthly["RevenuePerItem"] = monthly["Revenue"] / monthly["UnitsSold"]
 
-# Monthly cancellation rate, to see if returns spike in specific months
-monthly_cancel = (
-    customer_transactions.assign(Month=customer_transactions["InvoiceDate"].dt.to_period("M"))
-    .groupby("Month")
-    .agg(TotalInvoices=("InvoiceNo", "nunique"))
-)
-monthly_cancel_only = (
-    cancellations_raw.assign(Month=cancellations_raw["InvoiceDate"].dt.to_period("M"))
-    .groupby("Month")["InvoiceNo"].nunique()
-    .rename("CancelledInvoices")
-)
-monthly_cancel = monthly_cancel.join(monthly_cancel_only).fillna(0)
-monthly_cancel["CancellationRate"] = monthly_cancel["CancelledInvoices"] / monthly_cancel["TotalInvoices"]
-monthly_cancel.index = monthly_cancel.index.to_timestamp()
-print("\nMonthly cancellation rate:\n", monthly_cancel[["CancellationRate"]])
+    monthly["CancelledValue"] = cancellations.groupby("Month")["CancelValue"].sum()
+    monthly["CancelledValue"] = monthly["CancelledValue"].fillna(0)
+    monthly["NetRevenue"] = monthly["Revenue"] - monthly["CancelledValue"]
+    monthly["RevenueGrowthMoM"] = monthly["Revenue"].pct_change()
 
-# %%
-fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    monthly["IsPartialMonth"] = monthly.index == monthly.index.max()
+    monthly.to_csv(OUT / "monthly_metrics.csv")
 
-axes[0, 0].plot(monthly.index, monthly["Revenue"], marker="o")
-axes[0, 0].set_title("Monthly Revenue")
-axes[0, 0].tick_params(axis="x", rotation=45)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
-axes[0, 1].bar(monthly.index, monthly["RevenueGrowthPct"])
-axes[0, 1].axhline(0, linestyle="--", color="grey")
-axes[0, 1].set_title("Month-over-Month Revenue Growth (%)")
-axes[0, 1].tick_params(axis="x", rotation=45)
+    monthly["Revenue"].plot(ax=axes[0, 0], marker="o", label="Gross Revenue")
+    monthly["NetRevenue"].plot(ax=axes[0, 0], marker="o", label="Net Revenue")
+    axes[0, 0].set_title("Revenue over time")
+    axes[0, 0].legend()
 
-axes[1, 0].plot(monthly.index, monthly["Orders"], marker="o", label="Orders")
-axes[1, 0].plot(monthly.index, monthly["Customers"], marker="o", label="Customers")
-axes[1, 0].set_title("Monthly Orders vs Active Customers")
-axes[1, 0].legend()
-axes[1, 0].tick_params(axis="x", rotation=45)
+    monthly["Orders"].plot(ax=axes[0, 1], marker="o", title="Orders over time")
+    monthly["Customers"].plot(ax=axes[1, 0], marker="o", title="Customers over time")
+    monthly["AverageOrderValue"].plot(ax=axes[1, 1], marker="o", title="AOV over time")
 
-axes[1, 1].plot(monthly.index, monthly["AverageOrderValue"], marker="o")
-axes[1, 1].set_title("Average Order Value Over Time")
-axes[1, 1].tick_params(axis="x", rotation=45)
+    for ax in axes.ravel():
+        ax.grid(alpha=0.25)
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.savefig(OUT / "revenue_over_time.png", dpi=160)
+    plt.close()
 
-# %% [markdown]
-# ### Revenue driver decomposition
-# Revenue = Customers × Orders-per-Customer × Average-Order-Value. This
-# decomposes each month's revenue *change* into how much came from each factor,
-# rather than just reporting raw deltas side by side.
-
-# %%
-def decompose_revenue_drivers(monthly_df):
-    d = monthly_df.copy()
-    d["Revenue_prev"] = d["Revenue"].shift(1)
-    d["Customers_prev"] = d["Customers"].shift(1)
-    d["OrdersPerCustomer_prev"] = d["OrdersPerCustomer"].shift(1)
-    d["AOV_prev"] = d["AverageOrderValue"].shift(1)
-
-    # % change in each driver
-    d["CustomerGrowthPct"] = (d["Customers"] / d["Customers_prev"] - 1) * 100
-    d["OrdersPerCustomerGrowthPct"] = (d["OrdersPerCustomer"] / d["OrdersPerCustomer_prev"] - 1) * 100
-    d["AOVGrowthPct"] = (d["AverageOrderValue"] / d["AOV_prev"] - 1) * 100
-
-    # Which single driver moved the most this month (crude but interpretable
-    # "primary driver" flag)
-    driver_cols = ["CustomerGrowthPct", "OrdersPerCustomerGrowthPct", "AOVGrowthPct"]
-    d["PrimaryDriver"] = d[driver_cols].abs().idxmax(axis=1)
-    d["PrimaryDriver"] = d["PrimaryDriver"].replace({
-        "CustomerGrowthPct": "Customer count",
-        "OrdersPerCustomerGrowthPct": "Orders per customer",
-        "AOVGrowthPct": "Average order value",
-    })
-    return d[["Revenue", "RevenueGrowthPct", "CustomerGrowthPct",
-              "OrdersPerCustomerGrowthPct", "AOVGrowthPct", "PrimaryDriver"]]
-
-driver_decomposition = decompose_revenue_drivers(monthly)
-print("\n=== Revenue Driver Decomposition ===")
-print(driver_decomposition)
-
-# %% [markdown]
-# ## 5. Geographic analysis
-
-# %%
-country_summary = (
-    purchases.groupby("Country")
-    .agg(
+    known = purchases.dropna(subset=["CustomerID"]).copy()
+    monthly_known = known.groupby("Month").agg(
         Revenue=("Revenue", "sum"),
+        Orders=("InvoiceNo", "nunique"),
         Customers=("CustomerID", "nunique"),
-        Orders=("InvoiceNo", "nunique"),
     )
-)
-country_summary["AvgOrderValue"] = country_summary["Revenue"] / country_summary["Orders"]
-country_summary["RevenueSharePct"] = country_summary["Revenue"] / country_summary["Revenue"].sum() * 100
-country_summary = country_summary.sort_values("Revenue", ascending=False)
+    monthly_known["OrdersPerCustomer"] = monthly_known["Orders"] / monthly_known["Customers"]
+    monthly_known["AOV"] = monthly_known["Revenue"] / monthly_known["Orders"]
 
-print("=== Country Summary (all) ===")
-print(country_summary)
+    contrib = np.log(monthly_known[["Customers", "OrdersPerCustomer", "AOV"]]).diff()
 
-# Flag thin-data countries so small-sample noise isn't over-interpreted
-country_summary["LowSampleWarning"] = country_summary["Customers"] < 10
-print("\nCountries with fewer than 10 customers (interpret cautiously):")
-print(country_summary[country_summary["LowSampleWarning"]])
+    # FIX 2: drop first NaN row and partial last month
+    contrib = contrib.iloc[1:-1]
 
-uk_share = country_summary.loc["United Kingdom", "RevenueSharePct"] if "United Kingdom" in country_summary.index else None
-print(f"\nUK share of total revenue: {uk_share:.1f}%" if uk_share else "UK not found in data")
+    # FIX 3: convert datetime index to strings to avoid pandas bar/period converter bug
+    contrib.index = contrib.index.strftime("%Y-%m")
 
-# %%
-top_countries_ex_uk = country_summary.drop(index="United Kingdom", errors="ignore").head(10)
-plt.figure(figsize=(8, 5))
-plt.barh(top_countries_ex_uk.index, top_countries_ex_uk["Revenue"])
-plt.title("Top 10 Countries by Revenue (excl. UK)")
-plt.xlabel("Revenue (£)")
-plt.gca().invert_yaxis()
-plt.tight_layout()
-plt.show()
+    contrib.to_csv(OUT / "revenue_driver_contributions.csv")
 
-# %% [markdown]
-# ## 6. Product performance
+    contrib.plot(kind="bar", stacked=True, figsize=(12, 5))
+    plt.title("Revenue change decomposition (log contribution)")
+    plt.xlabel("Month")
+    plt.ylabel("Log-point contribution")
+    plt.tight_layout()
+    plt.savefig(OUT / "revenue_driver_contributions.png", dpi=160)
+    plt.close()
 
-# %%
-product_summary = (
-    purchases.groupby("Description")
-    .agg(
+    return monthly
+
+
+def geography_analysis(purchases, cancellations):
+    country = purchases.groupby("Country").agg(
         Revenue=("Revenue", "sum"),
-        UnitsSold=("Quantity", "sum"),
+        Orders=("InvoiceNo", "nunique"),
+        Customers=("CustomerID", "nunique"),
+    )
+    country["AOV"] = country["Revenue"] / country["Orders"]
+    country["RevenueShare"] = country["Revenue"] / country["Revenue"].sum()
+    country["CancelledValue"] = cancellations.groupby("Country")["CancelValue"].sum()
+    country["CancelledValue"] = country["CancelledValue"].fillna(0)
+    country["LowSampleFlag"] = country["Customers"] < MIN_COUNTRY_CUSTOMERS
+    country = country.sort_values("Revenue", ascending=False)
+    country.to_csv(OUT / "country_metrics.csv")
+
+    top10 = country.head(10)
+    top10["Revenue"].plot(kind="bar", figsize=(9, 5), title="Top 10 countries by revenue")
+    plt.ylabel("Revenue")
+    plt.tight_layout()
+    plt.savefig(OUT / "country_revenue_top10.png", dpi=160)
+    plt.close()
+
+    non_uk = country.drop(index="United Kingdom", errors="ignore").head(10)
+    non_uk["Revenue"].plot(kind="bar", figsize=(9, 5), title="Top 10 non-UK countries by revenue")
+    plt.ylabel("Revenue")
+    plt.tight_layout()
+    plt.savefig(OUT / "country_revenue_non_uk_top10.png", dpi=160)
+    plt.close()
+
+    return country
+
+
+def product_analysis(purchases, cancellations):
+    product = purchases.groupby("StockCode").agg(
+        Revenue=("Revenue", "sum"),
+        Units=("Quantity", "sum"),
         Orders=("InvoiceNo", "nunique"),
     )
-    .sort_values("Revenue", ascending=False)
-)
 
-most_sold_by_qty = product_summary.sort_values("UnitsSold", ascending=False).head(10)
-highest_revenue_products = product_summary.head(10)
-most_frequently_purchased = product_summary.sort_values("Orders", ascending=False).head(10)
+    desc = purchases.groupby("StockCode")["Description"].agg(
+        lambda s: s.dropna().mode().iloc[0] if s.notna().any() else ""
+    )
+    product["Description"] = desc
 
-# Overlap check: are top-revenue and top-volume products the same?
-top_rev_set = set(highest_revenue_products.index)
-top_qty_set = set(most_sold_by_qty.index)
-overlap = top_rev_set & top_qty_set
-print(f"Overlap between top-10 revenue and top-10 volume products: {len(overlap)}/10")
-print("Products in both lists:", overlap)
+    canc = cancellations.groupby("StockCode").agg(
+        CancelUnits=("CancelUnits", "sum"),
+        CancelValue=("CancelValue", "sum"),
+    )
+    product = product.join(canc).fillna({"CancelUnits": 0, "CancelValue": 0})
+    product["CancelUnitRate"] = product["CancelUnits"] / product["Units"]
 
-# Cancellation activity by product (using real product-return cancellations)
-product_cancellations = (
-    cancellations.groupby("Description")
-    .agg(CancelledUnits=("Quantity", "sum"), CancelledOrders=("InvoiceNo", "nunique"))
-)
-product_cancellations["CancelledUnits"] = product_cancellations["CancelledUnits"].abs()
-product_sold_units = purchases.groupby("Description")["Quantity"].sum().rename("SoldUnits")
+    product.sort_values("Revenue", ascending=False).head(20).to_csv(OUT / "top_products_revenue.csv")
+    product.sort_values("Units", ascending=False).head(20).to_csv(OUT / "top_products_units.csv")
+    product.sort_values("Orders", ascending=False).head(20).to_csv(OUT / "top_products_orders.csv")
+    product[product["Units"] >= 100].sort_values("CancelUnitRate", ascending=False).head(20).to_csv(
+        OUT / "top_products_cancel_rate.csv"
+    )
+    product.sort_values("CancelValue", ascending=False).head(20).to_csv(
+        OUT / "top_products_cancel_value.csv"
+    )
 
-product_cancel_rate = product_cancellations.join(product_sold_units, how="left").fillna(0)
-product_cancel_rate["CancellationRate"] = (
-    product_cancel_rate["CancelledUnits"]
-    / (product_cancel_rate["CancelledUnits"] + product_cancel_rate["SoldUnits"])
-)
-# Only meaningful for products with enough volume to not be noise
-top_cancelled_products = product_cancel_rate[
-    product_cancel_rate["SoldUnits"] + product_cancel_rate["CancelledUnits"] >= 20
-].sort_values("CancellationRate", ascending=False).head(10)
+    top20_units = set(product.nlargest(20, "Units").index)
+    top20_revenue = set(product.nlargest(20, "Revenue").index)
+    overlap = len(top20_units & top20_revenue)
 
-print("\n=== Highest-Revenue Products ===\n", highest_revenue_products)
-print("\n=== Highest-Volume Products ===\n", most_sold_by_qty)
-print("\n=== Most Frequently Purchased (by order count) ===\n", most_frequently_purchased)
-print("\n=== Products with Highest Cancellation Rate (min. 20 combined units) ===\n", top_cancelled_products)
+    product_stats = {
+        "top20_units_revenue_overlap_count": overlap,
+        "top20_revenue_share": (
+            product.nlargest(20, "Revenue")["Revenue"].sum() / product["Revenue"].sum()
+            if product["Revenue"].sum() else np.nan
+        ),
+    }
+    pd.Series(product_stats).to_csv(OUT / "product_stats.csv", header=["value"])
+    return product, product_stats
 
-# %%
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-axes[0].barh(most_sold_by_qty.index, most_sold_by_qty["UnitsSold"])
-axes[0].set_title("Top 10 Products by Units Sold")
-axes[0].invert_yaxis()
 
-axes[1].barh(highest_revenue_products.index, highest_revenue_products["Revenue"])
-axes[1].set_title("Top 10 Products by Revenue")
-axes[1].invert_yaxis()
-plt.tight_layout()
-plt.show()
+def customer_concentration(purchases, cancellations):
+    known_p = purchases.dropna(subset=["CustomerID"])
+    customer_rev = known_p.groupby("CustomerID")["Revenue"].sum().sort_values(ascending=False)
 
-# %% [markdown]
-# ## 7. Customer concentration (Pareto analysis)
+    known_c = cancellations.dropna(subset=["CustomerID"])
+    customer_cancel = known_c.groupby("CustomerID")["CancelValue"].sum()
 
-# %%
-revenue_per_customer = (
-    purchases.groupby("CustomerID")["Revenue"]
-    .sum()
-    .reset_index()
-    .sort_values("Revenue", ascending=False)
-    .reset_index(drop=True)
-)
+    customer = pd.DataFrame({"GrossRevenue": customer_rev})
+    customer["CancelledValue"] = customer_cancel
+    customer["CancelledValue"] = customer["CancelledValue"].fillna(0)
+    customer["NetRevenue"] = customer["GrossRevenue"] - customer["CancelledValue"]
+    customer = customer.sort_values("GrossRevenue", ascending=False)
+    customer.to_csv(OUT / "customer_revenue.csv")
 
-revenue_per_customer["cum_revenue_pct"] = (
-    revenue_per_customer["Revenue"].cumsum() / revenue_per_customer["Revenue"].sum() * 100
-)
-revenue_per_customer["customer_rank_pct"] = (
-    (revenue_per_customer.index + 1) / len(revenue_per_customer) * 100
-)
+    rev = customer["GrossRevenue"].values
+    cum = np.cumsum(rev) / rev.sum()
+    x = np.arange(1, len(rev) + 1) / len(rev)
 
-# Concrete Pareto readout: revenue share held by top 10% / 20% of customers
-def revenue_share_of_top_pct(df, pct):
-    n = int(len(df) * pct / 100)
-    return df.iloc[:n]["Revenue"].sum() / df["Revenue"].sum() * 100
+    def share_top(q):
+        idx = int(np.ceil(len(cum) * q)) - 1
+        return float(cum[max(idx, 0)])
 
-top10_share = revenue_share_of_top_pct(revenue_per_customer, 10)
-top20_share = revenue_share_of_top_pct(revenue_per_customer, 20)
+    metrics = {
+        "top_1pct_share": share_top(0.01),
+        "top_5pct_share": share_top(0.05),
+        "top_10pct_share": share_top(0.10),
+        "top_20pct_share": share_top(0.20),
+        "customers_for_50pct_revenue": int(np.searchsorted(cum, 0.5) + 1),
+        "customers_for_80pct_revenue": int(np.searchsorted(cum, 0.8) + 1),
+        "note": "concentration computed on identified customers only",
+    }
 
-print(f"Top 10% of customers generate {top10_share:.1f}% of revenue")
-print(f"Top 20% of customers generate {top20_share:.1f}% of revenue")
+    asc = np.sort(rev)
+    n = len(asc)
+    gini = (2 * np.sum(np.arange(1, n + 1) * asc) / (n * asc.sum())) - (n + 1) / n
+    metrics["gini"] = float(gini)
 
-# %%
-plt.figure(figsize=(8, 5))
-plt.plot(revenue_per_customer["customer_rank_pct"], revenue_per_customer["cum_revenue_pct"])
-plt.axhline(80, linestyle="--", color="grey")
-plt.axvline(20, linestyle="--", color="grey")
-plt.title("Cumulative Revenue Contribution by Customer (Pareto Curve)")
-plt.xlabel("% of Customers (ranked by revenue, descending)")
-plt.ylabel("Cumulative % of Revenue")
-plt.tight_layout()
-plt.show()
+    pd.Series(metrics).to_csv(OUT / "customer_concentration.csv", header=["value"])
 
-plt.figure(figsize=(8, 4))
-sns.histplot(revenue_per_customer["Revenue"], bins=30)
-plt.title("Customer Revenue Distribution")
-plt.xlabel("Revenue per Customer (£)")
-plt.tight_layout()
-plt.show()
+    plt.figure(figsize=(7, 5))
+    plt.plot(x, cum, label="Cumulative revenue")
+    plt.plot([0, 1], [0, 1], "--", color="gray", label="Perfect equality")
+    plt.title("Customer revenue concentration")
+    plt.xlabel("Share of customers")
+    plt.ylabel("Share of revenue")
+    plt.grid(alpha=0.25)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUT / "customer_concentration_curve.png", dpi=160)
+    plt.close()
+
+    return metrics
+
+
+def write_executive_summary(kpis, monthly, country, product_stats, concentration):
+    complete = monthly[~monthly["IsPartialMonth"]]
+    best_month = complete["Revenue"].idxmax() if len(complete) else monthly["Revenue"].idxmax()
+    worst_month = complete["Revenue"].idxmin() if len(complete) else monthly["Revenue"].idxmin()
+
+    uk_share = country.loc["United Kingdom", "RevenueShare"] if "United Kingdom" in country.index else np.nan
+
+    text = f"""# Executive Summary
+
+## Main findings
+- Gross revenue: {kpis['gross_revenue']:,.0f}
+- Cancelled value: {kpis['cancelled_value']:,.0f}
+- Net revenue: {kpis['net_revenue']:,.0f}
+- Orders: {kpis['orders']:,}
+- Customers (identified): {kpis['customers']:,}
+- Average order value: {kpis['avg_order_value']:.2f}
+- Cancellation rate (value): {kpis['cancellation_rate_value']:.1%}
+- Cancellation rate (orders): {kpis['cancellation_rate_orders']:.1%}
+- UK revenue share: {uk_share:.1%}
+- Top 20 product revenue share: {product_stats['top20_revenue_share']:.1%}
+- Top 20% customers revenue share: {concentration['top_20pct_share']:.1%}
+- Gini (identified customers): {concentration['gini']:.2f}
+
+## Stability over time
+- Strongest complete month: {best_month:%Y-%m}
+- Weakest complete month: {worst_month:%Y-%m}
+- Note: final month in dataset is partial and should be interpreted cautiously.
+
+## Caveats
+- Customer concentration uses identified customers only.
+- Cancellations are timestamped on cancellation date, not matched back to original purchase date.
+- Non-product stock codes and ambiguous rows excluded from valid purchase KPIs.
+"""
+    (OUT / "executive_summary.md").write_text(text, encoding="utf-8")
+
+
+def main():
+    df = load_data()
+    run_audit(df)
+
+    _, purchases, cancellations = classify_records(df)
+
+    kpis = compute_kpis(purchases, cancellations)
+    monthly = revenue_over_time(purchases, cancellations)
+    country = geography_analysis(purchases, cancellations)
+    _, product_stats = product_analysis(purchases, cancellations)
+    concentration = customer_concentration(purchases, cancellations)
+
+    write_executive_summary(kpis, monthly, country, product_stats, concentration)
+
+    print("Saved outputs to:", OUT.resolve())
+
+
+if __name__ == "__main__":
+    main()

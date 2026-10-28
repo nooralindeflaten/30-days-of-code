@@ -282,3 +282,12 @@ print(
         float_format=lambda x: f"{x:.4f}"
     )
 )
+
+# Save results to CSV
+results_path = Path(PROCESSED_DATA_PATH) / "day-12-baseline-comparison.csv"
+comparison.to_csv(results_path, index=False)
+
+best_model = comparison.iloc[0]["Model"]
+best_rmsse = comparison.iloc[0]["RMSSE"]
+
+print(f"\nBest model: {best_model} with RMSSE: {best_rmsse:.4f}")
